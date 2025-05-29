@@ -78,7 +78,7 @@ export class Db {
     const tx = this.db.transaction('meta', 'readwrite');
     const meta = tx.objectStore('meta');
 
-    this._lastMessageId = '' + await meta.get('lastMessageId') || '0-0';
+    this._lastMessageId = await meta.get('lastMessageId') || '0-0';
     const clientId = +(await meta.get('lastMessageId'));
 
     if (clientId) {

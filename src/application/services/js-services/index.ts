@@ -566,10 +566,11 @@ export class AFClientService implements AFService {
       throw new Error('User not found');
     }
 
-    const workspace = this.workspaces.get(context.workspaceId);
+    let workspace = this.workspaces.get(context.workspaceId);
 
     if (!workspace) {
-      throw new Error(`Workspace ${context.workspaceId} not opened`);
+      workspace = await openWorkspaceController(context.workspaceId);
+      this.workspaces.set(context.workspaceId, workspace);
     }
 
     await workspace.mount({ doc, awareness: undefined, collabType: context.collabType });

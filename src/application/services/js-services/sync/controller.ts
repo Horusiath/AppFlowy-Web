@@ -6,6 +6,7 @@ import { Db } from '@/application/services/js-services/sync/db';
 import { CollabOrigin, Types } from '@/application/types';
 import { defaultConfig } from '@/components/main/app.hooks';
 import { af_proto } from '@/proto/messages';
+import { getTokenParsed } from '@/application/session/token';
 
 
 const RECONNECT_TIMEOUT = 5000; // 5 seconds
@@ -15,7 +16,7 @@ export enum UpdateFlags {
   V2 = 0x01,
 }
 
-export const parseRid = (rid: string): af_proto.messages.IRid => {
+export const parseRid = (rid: string): af_proto.messages.IRid|null => {
   const ridParts = rid.split('-');
 
   if (ridParts.length !== 2) {
@@ -31,13 +32,13 @@ export const parseRid = (rid: string): af_proto.messages.IRid => {
 }
 
 export const openWorkspaceController = async (workspaceId: string): Promise<WorkspaceController> => {
-  const authToken = localStorage.getItem('token') || '';
+  const token = getTokenParsed()!;
   const uid = localStorage.getItem('uid') || '';
   const deviceId = localStorage.getItem('x-device-id') || '';
   const wsUrl = defaultConfig.cloudConfig.wsURL || '';
   const options: WorkspaceControllerOptions = {
     workspaceId,
-    authToken,
+    authToken: token.access_token,
     uid,
     deviceId,
     baseWebsocketUrl: wsUrl,
@@ -75,6 +76,7 @@ export class WorkspaceController extends ObservableV2<WorkspaceEvents> {
   db: Db;
   options: WorkspaceControllerOptions;
   onMessageQueue: Promise<void>|null = null;
+  sendQueue: af_proto.messages.IMessage[] = [];
 
   constructor(options: WorkspaceControllerOptions) {
     super();
@@ -106,7 +108,15 @@ export class WorkspaceController extends ObservableV2<WorkspaceEvents> {
 
     this.ws.addEventListener('open', (e) => {
       console.log('WebSocket connection opened:', e);
-      //TODO
+      if (this.sendQueue.length > 0) {
+        // Send all queued messages
+        console.log(`sending ${this.sendQueue.length} queued messages`);
+        for (const message of this.sendQueue) {
+          this.send(message);
+        }
+
+        this.sendQueue = []; // Clear the queue after sending
+      }
     });
     this.ws.addEventListener('close', (e) => {
       console.log('WebSocket connection closed:', e);
@@ -149,10 +159,10 @@ export class WorkspaceController extends ObservableV2<WorkspaceEvents> {
 
   public send(message: af_proto.messages.IMessage) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error('WebSocket is not open');
+      this.sendQueue.push(message);
+    } else {
+      this.ws.send(af_proto.messages.Message.encode(message).finish());
     }
-
-    this.ws.send(af_proto.messages.Message.encode(message).finish());
   }
 
   /**
@@ -181,8 +191,8 @@ export class WorkspaceController extends ObservableV2<WorkspaceEvents> {
     context.doc = context.doc || context.awareness?.doc;
     const { doc, awareness, collabType } = context;
 
-    if (!doc || !collabType) {
-      throw new Error('doc and collabType must be provided');
+    if (!doc) {
+      throw new Error('doc must be provided');
     }
 
     if (this.docs.has(doc.guid)) {
@@ -204,12 +214,14 @@ export class WorkspaceController extends ObservableV2<WorkspaceEvents> {
       });
     }
 
+    const lastMessageId = this.db.lastMessageId || '0-0';
+
     this.send({
       objectId: doc.guid,
       collabType,
       syncRequest: {
         stateVector: Y.encodeStateVector(doc),
-        lastMessageId: parseRid(this.db.lastMessageId),
+        lastMessageId: parseRid(lastMessageId),
       }
     });
     this.docs.set(doc.guid, context);
